@@ -13,9 +13,8 @@ export const MONAD_TESTNET_CONFIG = {
   blockExplorerUrls: ['https://testnet.monadscan.com'],
 };
 
-// Default mock contract address if user hasn't deployed one
-// We allow entering a custom contract address in the settings UI
-export const DEFAULT_CONTRACT_ADDRESS = '0x1111111111111111111111111111111111111111';
+// Default contract address (pointing to user's wallet to receive starting $MON fees)
+export const DEFAULT_CONTRACT_ADDRESS = '0xdFf2AC111AD7f752DA9EC54a6d56D02A8a5D4896';
 
 export function isMetaMaskInstalled(): boolean {
   return typeof window !== 'undefined' && (window as any).ethereum !== undefined;
