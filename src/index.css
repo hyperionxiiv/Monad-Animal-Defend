@@ -1,0 +1,381 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Share+Tech+Mono&display=swap');
+
+:root {
+  --monad-purple: #836efd;
+  --monad-purple-deep: #5f45ff;
+  --monad-purple-glow: rgba(131, 110, 253, 0.35);
+  --monad-purple-glow-strong: rgba(131, 110, 253, 0.6);
+  --bg-darker: #06040a;
+  --bg-dark: #0b0816;
+  --bg-panel: #120e24;
+  --bg-panel-light: #1e183a;
+  
+  --neon-yellow: #eab308;
+  --neon-yellow-glow: rgba(234, 179, 8, 0.3);
+  --neon-red: #ef4444;
+  --neon-red-glow: rgba(239, 68, 68, 0.3);
+  --neon-green: #10b981;
+  --neon-green-glow: rgba(16, 185, 129, 0.3);
+  
+  --text-primary: #f3f4f6;
+  --text-secondary: #9ca3af;
+  --text-muted: #6b7280;
+  
+  font-family: 'Outfit', sans-serif;
+  color: var(--text-primary);
+  background-color: var(--bg-darker);
+  
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  overflow-x: hidden;
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg-darker);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-darker);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--bg-panel-light);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--monad-purple);
+}
+
+/* Glow Utility Class */
+.glow-purple {
+  box-shadow: 0 0 15px var(--monad-purple-glow);
+}
+.glow-yellow {
+  box-shadow: 0 0 15px var(--neon-yellow-glow);
+}
+.glow-text-purple {
+  text-shadow: 0 0 8px rgba(131, 110, 253, 0.6);
+}
+.glow-text-yellow {
+  text-shadow: 0 0 8px rgba(234, 179, 8, 0.6);
+}
+
+/* Keyframe animations */
+@keyframes pulseGlow {
+  0%, 100% {
+    box-shadow: 0 0 10px var(--monad-purple-glow);
+    border-color: rgba(131, 110, 253, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 25px var(--monad-purple-glow-strong);
+    border-color: rgba(131, 110, 253, 0.9);
+  }
+}
+
+@keyframes scanline {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100%); }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-6px); }
+}
+
+.pulsing-border {
+  animation: pulseGlow 2s infinite ease-in-out;
+}
+
+.floating {
+  animation: float 4s infinite ease-in-out;
+}
+
+/* Glassmorphism Panel */
+.glass-panel {
+  background: rgba(18, 14, 36, 0.7);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(131, 110, 253, 0.15);
+  border-radius: 12px;
+}
+
+/* Tech Mono Font for Stats */
+.mono-font {
+  font-family: 'Share Tech Mono', monospace;
+}
+
+/* Cyber Button */
+.cyber-button {
+  background: linear-gradient(135deg, var(--monad-purple-deep) 0%, var(--monad-purple) 100%);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease-in-out;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: center;
+  text-transform: uppercase;
+  font-size: 0.85rem;
+  letter-spacing: 0.05em;
+  box-shadow: 0 4px 10px rgba(95, 69, 255, 0.3);
+}
+
+.cyber-button:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(131, 110, 253, 0.5);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.cyber-button:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.cyber-button:disabled {
+  background: var(--bg-panel-light);
+  color: var(--text-muted);
+  cursor: not-allowed;
+  box-shadow: none;
+  border-color: rgba(255, 255, 255, 0.02);
+}
+
+/* Outline Cyber Button */
+.cyber-button-outline {
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid rgba(131, 110, 253, 0.4);
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease-in-out;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: center;
+  font-size: 0.85rem;
+}
+
+.cyber-button-outline:hover:not(:disabled) {
+  background: rgba(131, 110, 253, 0.1);
+  border-color: var(--monad-purple);
+  box-shadow: 0 0 10px var(--monad-purple-glow);
+}
+
+.cyber-button-outline:disabled {
+  color: var(--text-muted);
+  border-color: rgba(255, 255, 255, 0.05);
+  cursor: not-allowed;
+}
+
+/* Green Cyber Button for Wins */
+.cyber-button-green {
+  background: linear-gradient(135deg, #065f46 0%, var(--neon-green) 100%);
+  box-shadow: 0 4px 10px rgba(16, 185, 129, 0.3);
+}
+.cyber-button-green:hover:not(:disabled) {
+  box-shadow: 0 6px 20px rgba(16, 185, 129, 0.5);
+}
+
+/* Yellow Cyber Button for shop purchases */
+.cyber-button-yellow {
+  background: linear-gradient(135deg, #854d0e 0%, var(--neon-yellow) 100%);
+  color: #06040a;
+  box-shadow: 0 4px 10px rgba(234, 179, 8, 0.3);
+  font-weight: 800;
+}
+.cyber-button-yellow:hover:not(:disabled) {
+  box-shadow: 0 6px 20px rgba(234, 179, 8, 0.5);
+}
+
+/* Main Dashboard Layout */
+.app-container {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.header {
+  height: 70px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 24px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid rgba(131, 110, 253, 0.2);
+}
+
+.game-main {
+  flex: 1;
+  display: grid;
+  grid-template-cols: 1fr 340px;
+  gap: 20px;
+  padding: 20px;
+  max-width: 1280px;
+  width: 100%;
+  margin: 0 auto;
+  align-items: start;
+}
+
+@media (max-width: 1100px) {
+  .game-main {
+    grid-template-columns: 1fr;
+  }
+}
+
+.canvas-container {
+  position: relative;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 2px solid rgba(131, 110, 253, 0.2);
+  background: var(--bg-dark);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+/* Cyber grid lines overlays for UI aesthetics */
+.grid-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  background-image: 
+    linear-gradient(rgba(18, 14, 36, 0.3) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(18, 14, 36, 0.3) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+.scanline-effect {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    rgba(18, 16, 16, 0) 50%, 
+    rgba(0, 0, 0, 0.25) 50%
+  );
+  background-size: 100% 4px;
+  z-index: 10;
+  pointer-events: none;
+  opacity: 0.15;
+}
+
+/* Modals */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(6, 4, 10, 0.85);
+  backdrop-filter: blur(8px);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 100;
+}
+
+.modal-content {
+  width: 100%;
+  max-width: 480px;
+  padding: 30px;
+  text-align: center;
+}
+
+/* Game settings toggles */
+.mode-toggle-container {
+  display: flex;
+  background: var(--bg-panel-light);
+  border-radius: 8px;
+  padding: 4px;
+  border: 1px solid rgba(131, 110, 253, 0.1);
+}
+
+.mode-toggle-btn {
+  flex: 1;
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-weight: 600;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 0.85rem;
+}
+
+.mode-toggle-btn.active {
+  background: var(--monad-purple);
+  color: #ffffff;
+  box-shadow: 0 2px 8px var(--monad-purple-glow);
+}
+
+/* Custom cards */
+.tower-card {
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(30, 24, 58, 0.4);
+  border-radius: 8px;
+  padding: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tower-card:hover {
+  border-color: var(--monad-purple);
+  background: rgba(131, 110, 253, 0.1);
+  transform: translateY(-2px);
+}
+
+.tower-card.selected {
+  border-color: var(--monad-purple);
+  background: rgba(131, 110, 253, 0.15);
+  box-shadow: 0 0 10px var(--monad-purple-glow);
+}
+
+.tower-card.chog-border.selected {
+  border-color: #a855f7;
+  box-shadow: 0 0 10px rgba(168, 85, 247, 0.3);
+}
+
+.tower-card.molandak-border.selected {
+  border-color: var(--neon-yellow);
+  box-shadow: 0 0 10px rgba(234, 179, 8, 0.3);
+}
+
+/* Tooltips & Stats Grid */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.stat-item {
+  background: rgba(30, 24, 58, 0.3);
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.stat-val {
+  font-size: 1.4rem;
+  font-weight: 700;
+}
