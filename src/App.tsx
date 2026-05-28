@@ -1,133 +1,137 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
+import { Loader2, Tv } from 'lucide-react';
 import { 
-  Shield, 
-  Coins, 
-  Play, 
-  RotateCcw, 
-  ChevronRight, 
-  Zap, 
-  AlertTriangle, 
-  Info,
-  TrendingUp,
-  Settings,
-  Flame,
-  Sparkles,
-  Link
-} from 'lucide-react';
-import type { 
-  Tower, 
-  Enemy, 
-  Projectile, 
-  Particle, 
-  Point, 
-  TowerType, 
-  GameStats,
-} from './game/types';
-import { 
-  TOWER_CONFIGS, 
-  TOWER_CONFIGS as Configs
-} from './game/types';
-import { 
-  drawGame, 
-  updateGameEngine, 
-  CELL_SIZE, 
-  CANVAS_WIDTH, 
-  CANVAS_HEIGHT, 
-  isCellOnPath, 
-  generateWaveEnemies,
-  createExplosion,
-  GRID_COLS,
-  GRID_ROWS,
-  getPixelPath
-} from './game/gameEngine';
-import { 
-  isMetaMaskInstalled, 
-  connectWallet, 
-  switchToMonadTestnet, 
-  sendStartGameTx, 
-  waitForTxReceipt,
-  DEFAULT_CONTRACT_ADDRESS,
+  isMetaMaskInstalled,
+  connectWallet,
   getCurrentChainId,
-  MONAD_TESTNET_CONFIG
+  switchNetwork,
+  getContractAddress,
+  checkHasPet,
+  getPetStats,
+  getLeaderboard,
+  createPet,
+  feedPet,
+  cleanPet,
+  sleepPet,
+  playWithPet,
+  fetchPetEvents,
+  claimLevelReward,
+  getLastClaimedLevel,
+  getContractBalance,
+  MONAD_TESTNET_CONFIG,
+  MONAD_MAINNET_CONFIG
 } from './utils/web3';
+import type { PetStats, LeaderboardEntry, PetEventLog } from './utils/web3';
+
+const STARTER_SKINS = [
+  { id: 0, name: "Chog", icon: "/chog.png", color: "#a855f7", desc: "Adorable, loyal purple guardian baby Chog." }
+];
+
+
+
+function getPetFace(pet: PetStats, isPlaying: boolean, isSleeping: boolean): { face: string, statusText: string } {
+  const hunger = pet.hunger;
+  const hygiene = pet.hygiene;
+  const energy = pet.energy;
+  const skinId = pet.skinId;
+
+  // Face designs
+  const faces = [
+    // Chog
+    {
+      idle: "(⊙ _ ⊙)",
+      happy: "(⊙ ▽ ⊙)",
+      sad: "(⊙ △ ⊙)",
+      sleeping: "(- _ -) zZZ",
+      playing: "(＠ ▽ ＠)"
+    },
+    // Molandak
+    {
+      idle: "(• _ •)",
+      happy: "(• ⌔ •)",
+      sad: "(• ⌓ •)",
+      sleeping: "(- ⌔ -) zZZ",
+      playing: "(≧ ⌔ ≦)"
+    },
+    // Moyaki
+    {
+      idle: "(• 人 •)",
+      happy: "(^ 人 ^)",
+      sad: "(v 人 v)",
+      sleeping: "(- 人 -) zZZ",
+      playing: "(> 人 <)"
+    }
+  ];
+
+  const petFaces = faces[skinId] || faces[0];
+
+  if (isSleeping) {
+    return { face: petFaces.sleeping, statusText: "SLEEPING PEACEFULLY..." };
+  }
+  if (isPlaying) {
+    return { face: petFaces.playing, statusText: "PLAYING ENERGETICALLY! +10 XP" };
+  }
+  if (hunger < 30) {
+    return { face: petFaces.sad, statusText: "STARVING! FEED ME PLEASE..." };
+  }
+  if (hygiene < 30) {
+    return { face: petFaces.sad, statusText: "DIRTY! I NEED A SHOWER..." };
+  }
+  if (energy < 30) {
+    return { face: petFaces.sad, statusText: "EXHAUSTED... NEED SOME SLEEP" };
+  }
+  if (hunger > 80 && hygiene > 80 && energy > 50) {
+    return { face: petFaces.happy, statusText: "SUPER HAPPY AND FULL OF LIFE!" };
+  }
+  return { face: petFaces.idle, statusText: "DOING JUST FINE." };
+}
 
 function App() {
   // Web3 State
   const [walletConnected, setWalletConnected] = useState(false);
   const [userAddress, setUserAddress] = useState<string | null>(null);
-  const [isWeb3Mode, setIsWeb3Mode] = useState(false);
-  const [contractAddress, setContractAddress] = useState(DEFAULT_CONTRACT_ADDRESS);
+  const [isMainnet, setIsMainnet] = useState(false); // default to Testnet
+  const [contractAddress, setContractAddress] = useState("");
+  
+  // Active Game State
+  const [pet, setPet] = useState<PetStats | null>(null);
+  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
+  const [eventLogs, setEventLogs] = useState<PetEventLog[]>([]);
+  
+  // UI Controls
+  const [isDemoMode, setIsDemoMode] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   const [isTxPending, setIsTxPending] = useState(false);
   const [txHash, setTxHash] = useState<string | null>(null);
-  const [showSettings, setShowSettings] = useState(false);
-  const [networkError, setNetworkError] = useState(false);
-
-  // Game Stats
-  const [stats, setStats] = useState<GameStats>({
-    gold: 400, // Starts with 400 gold so they can place a couple of towers
-    score: 0,
-    lives: 20,
-    wave: 0,
-    isGameStarted: false,
-    isGameOver: false,
-    isWeb3Mode: false,
-    isTxPending: false,
-    txHash: null,
-    walletConnected: false,
-    userAddress: null,
-    networkError: false
-  });
-
-  // Game Objects State (Towers remains React state, others are Refs to prevent loop race conditions)
-  const [towers, setTowers] = useState<Tower[]>([]);
-  const enemiesRef = useRef<Enemy[]>([]);
-  const projectilesRef = useRef<Projectile[]>([]);
-  const particlesRef = useRef<Particle[]>([]);
+  const [toast, setToast] = useState<string | null>(null);
+  const [activePanel, setActivePanel] = useState<'none' | 'rewards' | 'leaderboard' | 'logs'>('none');
+  const [showInfo, setShowInfo] = useState(false);
   
-  // Wave Spawner State
-  const enemiesToSpawnRef = useRef<Omit<Enemy, 'id' | 'x' | 'y'>[]>([]);
-  const lastSpawnTimeRef = useRef<number>(0);
-  const [enemyCount, setEnemyCount] = useState(0);
+  // Reward system states
+  const [lastClaimedLevel, setLastClaimedLevel] = useState<number>(1);
+  const [contractBalance, setContractBalance] = useState<string>("0.0000");
+  const [isClaiming, setIsClaiming] = useState<boolean>(false);
   
-  const [autoStartNextWave, setAutoStartNextWave] = useState(false);
-  const [currentWaveLaunched, setCurrentWaveLaunched] = useState(false);
-
-  // Placement & Selection
-  const [placingTowerType, setPlacingTowerType] = useState<TowerType | null>(null);
-  const [selectedTowerId, setSelectedTowerId] = useState<string | null>(null);
-  const [hoveredCell, setHoveredCell] = useState<Point | null>(null);
-
-  // Loop control
-  const [isPaused, setIsPaused] = useState(false);
-  const [gameSpeed, setGameSpeed] = useState<1 | 2>(1);
-
-  // Canvas Ref
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  // Animation states
+  const [isPlayingAnim, setIsPlayingAnim] = useState(false);
+  const [isSleepingState, setIsSleepingState] = useState(false);
   
-  // Latest values for game loop to avoid stale closures
-  const gameObjectsRef = useRef({
-    towers,
-    stats,
-    isPaused,
-    gameSpeed,
-    selectedTowerId,
-    currentWaveLaunched,
-    autoStartNextWave
-  });
+  // Creation Form State
+  const [createName, setCreateName] = useState("");
+  const selectedSkin = 0;
 
+  // Time calculations
+  const [petAgeString, setPetAgeString] = useState("0D 0H");
+
+  const [decayString, setDecayString] = useState("HUNGER DECAY IN 1H");
+
+  // Load contract address based on network setting
   useEffect(() => {
-    gameObjectsRef.current = {
-      towers,
-      stats,
-      isPaused,
-      gameSpeed,
-      selectedTowerId,
-      currentWaveLaunched,
-      autoStartNextWave
-    };
-  }, [towers, stats, isPaused, gameSpeed, selectedTowerId, currentWaveLaunched, autoStartNextWave]);
+    const addr = getContractAddress(isMainnet ? MONAD_MAINNET_CONFIG.chainId : MONAD_TESTNET_CONFIG.chainId);
+    setContractAddress(addr);
+  }, [isMainnet]);
 
-  // Check MetaMask connection status on load
+  // Check wallet connection on load
   useEffect(() => {
     async function checkConnection() {
       if (isMetaMaskInstalled()) {
@@ -135,38 +139,38 @@ function App() {
         try {
           const accounts = await ethereum.request({ method: 'eth_accounts' });
           if (accounts && accounts.length > 0) {
-            setUserAddress(accounts[0]);
+            setUserAddress(accounts[0].toLowerCase());
             setWalletConnected(true);
             
-            // Check chain ID
-            const chainId = await getCurrentChainId();
-            if (chainId !== MONAD_TESTNET_CONFIG.chainId) {
-              setNetworkError(true);
+            const currentChain = await getCurrentChainId();
+            if (currentChain && currentChain.toLowerCase() === MONAD_MAINNET_CONFIG.chainId.toLowerCase()) {
+              setIsMainnet(true);
+            } else {
+              setIsMainnet(false);
             }
           }
         } catch (e) {
-          console.error(e);
+          console.error("Error checking wallet connection:", e);
         }
 
-        // Listen for accounts change
+        // Listeners
         ethereum.on('accountsChanged', (accounts: string[]) => {
           if (accounts.length > 0) {
-            setUserAddress(accounts[0]);
+            setUserAddress(accounts[0].toLowerCase());
             setWalletConnected(true);
+            setIsDemoMode(false);
           } else {
             setUserAddress(null);
             setWalletConnected(false);
-            setIsWeb3Mode(false);
+            setPet(null);
           }
         });
 
-        // Listen for chain change
-        ethereum.on('chainChanged', (chainId: string) => {
-          if (chainId === MONAD_TESTNET_CONFIG.chainId) {
-            setNetworkError(false);
+        ethereum.on('chainChanged', (newChainId: string) => {
+          if (newChainId && newChainId.toLowerCase() === MONAD_MAINNET_CONFIG.chainId.toLowerCase()) {
+            setIsMainnet(true);
           } else {
-            setNetworkError(true);
-            setIsWeb3Mode(false);
+            setIsMainnet(false);
           }
         });
       }
@@ -174,1051 +178,1039 @@ function App() {
     checkConnection();
   }, []);
 
-  // Web3 Connection triggers
-  const handleConnectWallet = async () => {
+  // Fetch pet data when wallet connects or contract changes
+  useEffect(() => {
+    if (walletConnected && userAddress && contractAddress && !isDemoMode) {
+      fetchPetData();
+    }
+  }, [walletConnected, userAddress, contractAddress, isDemoMode]);
+
+  // If Demo Mode is enabled, load mock data or local storage
+  useEffect(() => {
+    if (isDemoMode) {
+      loadDemoPet();
+    }
+  }, [isDemoMode]);
+
+  // Update pet age and countdown strings periodically
+  useEffect(() => {
+    if (!pet) return;
+    
+    const interval = setInterval(() => {
+      // Calculate age
+      const now = Math.floor(Date.now() / 1000);
+      const ageSeconds = now - Number(pet.createdAt);
+      const days = Math.floor(ageSeconds / (24 * 3600));
+      const hours = Math.floor((ageSeconds % (24 * 3600)) / 3600);
+      const minutes = Math.floor((ageSeconds % 3600) / 60);
+      
+      setPetAgeString(`${days}D ${hours}H ${minutes}M`);
+
+      // Decay string (Hunger decreases by 1 point per hour, Hygiene per 1.5h, Energy per 2h)
+      // Calculate time until next hunger decrease
+      const timeSinceLastUpdated = now - Number(pet.lastUpdated);
+      const secondsToHungerDecay = 3600 - (timeSinceLastUpdated % 3600);
+      const decMin = Math.floor(secondsToHungerDecay / 60);
+      const decSec = secondsToHungerDecay % 60;
+      setDecayString(`HUNGER DECAY IN ${decMin}M ${decSec}S`);
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [pet]);
+
+  const showToast = (msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 3000);
+  };
+
+  const fetchPetData = async () => {
+    if (!contractAddress || !userAddress) return;
+    setIsLoading(true);
+    try {
+      const hasPetExist = await checkHasPet(contractAddress, userAddress);
+      
+      if (hasPetExist) {
+        const stats = await getPetStats(contractAddress, userAddress);
+        if (stats) {
+          setPet(stats);
+          // Apply sleep state if energy was low and it just slept, otherwise false
+          if (stats.energy > 80 && isSleepingState) {
+            setIsSleepingState(false);
+          }
+        }
+        
+        // Fetch events
+        const events = await fetchPetEvents(contractAddress, userAddress);
+        setEventLogs(events);
+
+        // Fetch reward claiming progress
+        const claimedLevel = await getLastClaimedLevel(contractAddress, userAddress);
+        setLastClaimedLevel(claimedLevel);
+      } else {
+        setPet(null);
+      }
+      
+      // Fetch contract reward pool balance
+      const balance = await getContractBalance(contractAddress);
+      setContractBalance(balance);
+
+      // Fetch leaderboard
+      const lb = await getLeaderboard(contractAddress);
+      setLeaderboard(lb);
+    } catch (e) {
+      console.error("Error fetching pet data:", e);
+      showToast("Error reading from Monad blockchain");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Demo mode functions
+  const loadDemoPet = () => {
+    const saved = localStorage.getItem("eternal_petz_demo_pet");
+    const savedLogs = localStorage.getItem("eternal_petz_demo_logs");
+    
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        // Apply offline decay
+        const now = Math.floor(Date.now() / 1000);
+        const timePassed = now - parsed.lastUpdated;
+        
+        if (timePassed > 0) {
+          const hungerDecay = Math.floor(timePassed / 3600);
+          const hygieneDecay = Math.floor(timePassed / 5400);
+          const energyDecay = Math.floor(timePassed / 7200);
+          
+          parsed.hunger = Math.max(0, parsed.hunger - hungerDecay);
+          parsed.hygiene = Math.max(0, parsed.hygiene - hygieneDecay);
+          parsed.energy = Math.max(0, parsed.energy - energyDecay);
+          parsed.lastUpdated = now;
+        }
+
+        // Parse bigints back
+        setPet({
+          name: parsed.name,
+          hunger: parsed.hunger,
+          hygiene: parsed.hygiene,
+          energy: parsed.energy,
+          level: parsed.level,
+          xp: BigInt(parsed.xp),
+          createdAt: BigInt(parsed.createdAt),
+          lastUpdated: BigInt(parsed.lastUpdated),
+          skinId: parsed.skinId
+        });
+      } catch (e) {
+        console.error(e);
+      }
+    } else {
+      setPet(null);
+    }
+
+    if (savedLogs) {
+      try {
+        setEventLogs(JSON.parse(savedLogs));
+      } catch (e) {
+        console.error(e);
+      }
+    } else {
+      setEventLogs([]);
+    }
+
+    // Set demo leaderboard
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        setLeaderboard([{
+          owner: "you (demo)",
+          petName: parsed.name,
+          level: parsed.level,
+          xp: BigInt(parsed.xp),
+          skinId: parsed.skinId
+        }]);
+      } catch (e) {
+        setLeaderboard([]);
+      }
+    } else {
+      setLeaderboard([]);
+    }
+  };
+
+  const saveDemoPet = (newPet: PetStats, newLogs: PetEventLog[]) => {
+    setPet(newPet);
+    setEventLogs(newLogs);
+    
+    const serializePet = {
+      name: newPet.name,
+      hunger: newPet.hunger,
+      hygiene: newPet.hygiene,
+      energy: newPet.energy,
+      level: newPet.level,
+      xp: newPet.xp.toString(),
+      createdAt: newPet.createdAt.toString(),
+      lastUpdated: newPet.lastUpdated.toString(),
+      skinId: newPet.skinId
+    };
+    
+    localStorage.setItem("eternal_petz_demo_pet", JSON.stringify(serializePet));
+    localStorage.setItem("eternal_petz_demo_logs", JSON.stringify(newLogs));
+
+    // Update demo leaderboard
+    updateDemoLeaderboard(newPet);
+  };
+
+  const updateDemoLeaderboard = (demoPet: PetStats) => {
+    setLeaderboard([{
+      owner: "you (demo)",
+      petName: demoPet.name,
+      level: demoPet.level,
+      xp: demoPet.xp,
+      skinId: demoPet.skinId
+    }]);
+  };
+
+  // Web3 Wallet connection trigger
+  const handleConnect = async () => {
     try {
       const address = await connectWallet();
       if (address) {
         setUserAddress(address);
         setWalletConnected(true);
-        const chainId = await getCurrentChainId();
-        if (chainId === MONAD_TESTNET_CONFIG.chainId) {
-          setNetworkError(false);
-          setIsWeb3Mode(true); // default to Web3 Mode on connection
-        } else {
-          setNetworkError(true);
-          // Try switching
-          await handleSwitchNetwork();
+        setIsDemoMode(false);
+        
+        const currentChain = await getCurrentChainId();
+        
+        const targetChain = isMainnet ? MONAD_MAINNET_CONFIG.chainId : MONAD_TESTNET_CONFIG.chainId;
+        if (!currentChain || currentChain.toLowerCase() !== targetChain.toLowerCase()) {
+          const switched = await switchNetwork(isMainnet);
+          if (!switched) {
+            showToast("Failed to switch Monad network. Please switch manually.");
+          }
         }
       }
     } catch (e: any) {
-      alert(e.message || 'Failed to connect wallet');
+      showToast(e.message || "Failed to connect wallet");
     }
   };
 
-  const handleSwitchNetwork = async () => {
-    const success = await switchToMonadTestnet();
-    if (success) {
-      setNetworkError(false);
-      setIsWeb3Mode(true);
+  // Toggle network setting (Testnet vs Mainnet)
+  const toggleNetwork = async () => {
+    const nextMainnet = !isMainnet;
+    setIsMainnet(nextMainnet);
+    showToast(`Switched target network to Monad ${nextMainnet ? "Mainnet" : "Testnet"}`);
+    
+    if (walletConnected) {
+      const success = await switchNetwork(nextMainnet);
+      if (!success) {
+        showToast("Please switch network in your wallet manually");
+      }
+    }
+  };
+
+  // Reset or Disconnect
+  const handleExit = () => {
+    if (isDemoMode) {
+      if (confirm("Reset Demo pet data? This will clear local storage.")) {
+        localStorage.removeItem("eternal_petz_demo_pet");
+        localStorage.removeItem("eternal_petz_demo_logs");
+        setPet(null);
+        setEventLogs([]);
+        setLeaderboard([]);
+      }
     } else {
-      alert('Could not switch to Monad Testnet. Please add it to MetaMask.');
+      setUserAddress(null);
+      setWalletConnected(false);
+      setPet(null);
     }
   };
 
-  // Start the Game
-  const handleStartGame = async () => {
-    const gameId = Math.floor(Math.random() * 1000000);
+  // Create Pet
+  const handleCreatePet = async () => {
+    if (!createName.trim()) {
+      showToast("Please enter a pet name");
+      return;
+    }
+    if (createName.length > 20) {
+      showToast("Name must be 20 characters or less");
+      return;
+    }
 
-    if (isWeb3Mode) {
-      if (!walletConnected) {
-        alert('Please connect your wallet first!');
+    if (isDemoMode) {
+      const newPet: PetStats = {
+        name: createName,
+        hunger: 80,
+        hygiene: 80,
+        energy: 80,
+        level: 1,
+        xp: 0n,
+        createdAt: BigInt(Math.floor(Date.now() / 1000)),
+        lastUpdated: BigInt(Math.floor(Date.now() / 1000)),
+        skinId: selectedSkin
+      };
+      
+      const newLogs: PetEventLog[] = [{
+        type: 'create',
+        description: `Day 1: Created Pet "${createName}"`,
+        timestamp: Math.floor(Date.now() / 1000),
+        txHash: "0xsimulation"
+      }];
+      
+      saveDemoPet(newPet, newLogs);
+      showToast(`Created Demo pet: ${createName}!`);
+      return;
+    }
+
+    // Web3 Mode
+    if (!walletConnected) return;
+    
+    // Ensure correct network
+    const currentChain = await getCurrentChainId();
+    const targetChain = isMainnet ? MONAD_MAINNET_CONFIG.chainId : MONAD_TESTNET_CONFIG.chainId;
+    if (!currentChain || currentChain.toLowerCase() !== targetChain.toLowerCase()) {
+      const switched = await switchNetwork(isMainnet);
+      if (!switched) {
+        showToast(`Please switch wallet to Monad ${isMainnet ? "Mainnet" : "Testnet"}`);
         return;
       }
-      setIsTxPending(true);
-      setTxHash(null);
+    }
 
-      try {
-        const hash = await sendStartGameTx(contractAddress, gameId);
-        setTxHash(hash);
-        
-        // Wait for blockchain confirmation
-        const success = await waitForTxReceipt(hash);
-        if (!success) {
-          throw new Error('Transaction failed on-chain.');
-        }
-        
-        setIsTxPending(false);
-        initializeGameSession();
-      } catch (error: any) {
+    setIsTxPending(true);
+    setTxHash(null);
+
+    try {
+      const hash = await createPet(contractAddress, createName, selectedSkin);
+      setTxHash(hash);
+      showToast("Transaction sent! Creating pet...");
+      
+      // wait a bit and refresh
+      setTimeout(() => {
+        fetchPetData();
         setIsTxPending(false);
         setTxHash(null);
-        alert(error.message || 'Transaction rejected or failed. Try Demo Mode if you do not have MON testnet.');
+        showToast("Pet created successfully!");
+      }, 5000);
+    } catch (e: any) {
+      console.error(e);
+      showToast(e.reason || e.message || "Failed to create pet on-chain");
+      setIsTxPending(false);
+    }
+  };
+
+  // Care actions
+  const handleAction = async (actionType: 'feed' | 'clean' | 'sleep' | 'play') => {
+    if (!pet) return;
+
+    if (isDemoMode) {
+      // Simulate action
+      let hunger = pet.hunger;
+      let hygiene = pet.hygiene;
+      let energy = pet.energy;
+      let level = pet.level;
+      let xp = pet.xp;
+      let logDesc = "";
+
+      if (actionType === 'feed') {
+        hunger = Math.min(100, hunger + 20);
+        xp += 5n;
+        logDesc = "You fed your pet (+20 hunger, +5 XP).";
+      } else if (actionType === 'clean') {
+        hygiene = Math.min(100, hygiene + 20);
+        xp += 5n;
+        logDesc = "You cleaned your pet (+20 hygiene, +5 XP).";
+      } else if (actionType === 'sleep') {
+        energy = Math.min(100, energy + 30);
+        xp += 3n;
+        logDesc = "Your pet went to sleep (+30 energy, +3 XP).";
+        setIsSleepingState(true);
+      } else if (actionType === 'play') {
+        if (energy < 10) {
+          showToast("Pet is too tired to play!");
+          return;
+        }
+        energy -= 10;
+        xp += 10n;
+        setIsPlayingAnim(true);
+        setTimeout(() => setIsPlayingAnim(false), 3000);
+
+        // Random decrease hunger or hygiene
+        if (Math.random() > 0.5) {
+          hunger = Math.max(0, hunger - 10);
+        } else {
+          hygiene = Math.max(0, hygiene - 10);
+        }
+        logDesc = "You played with your pet (-10 energy, +10 XP, -10 hunger/hygiene).";
       }
-    } else {
-      // Demo Mode starts instantly
-      initializeGameSession();
-    }
-  };
 
-  const initializeGameSession = () => {
-    setTowers([]);
-    
-    // Clear refs to prevent state race conditions
-    enemiesRef.current = [];
-    projectilesRef.current = [];
-    particlesRef.current = [];
-    enemiesToSpawnRef.current = [];
-    lastSpawnTimeRef.current = 0;
-
-    setPlacingTowerType(null);
-    setSelectedTowerId(null);
-    setIsPaused(false);
-    setCurrentWaveLaunched(false);
-
-    setStats({
-      gold: 400,
-      score: 0,
-      lives: 20,
-      wave: 1,
-      isGameStarted: true,
-      isGameOver: false,
-      isWeb3Mode,
-      isTxPending: false,
-      txHash: null,
-      walletConnected,
-      userAddress,
-      networkError
-    });
-  };
-
-  const launchCurrentWave = () => {
-    if (!stats.isGameStarted || stats.isGameOver || currentWaveLaunched) return;
-    setCurrentWaveLaunched(true);
-    const waveEnemies = generateWaveEnemies(stats.wave);
-    enemiesToSpawnRef.current = waveEnemies;
-    lastSpawnTimeRef.current = 0; // Trigger instant spawn on first loop iteration!
-  };
-
-
-
-  // Build a tower
-  const handlePlaceTower = (gridX: number, gridY: number) => {
-    if (!placingTowerType) return;
-    
-    const config = TOWER_CONFIGS[placingTowerType];
-    if (stats.gold < config.cost) {
-      alert('Not enough gold (MON)!');
-      return;
-    }
-
-    // Check if cell is occupied or on path
-    const isOccupied = towers.some(t => t.gridX === gridX && t.gridY === gridY);
-    const isOnPath = isCellOnPath(gridX, gridY);
-
-    if (isOccupied || isOnPath) {
-      return;
-    }
-
-    // Create the Tower
-    const newTower: Tower = {
-      id: Math.random().toString(36).substring(2, 9),
-      gridX,
-      gridY,
-      x: gridX * CELL_SIZE + CELL_SIZE / 2,
-      y: gridY * CELL_SIZE + CELL_SIZE / 2,
-      type: placingTowerType,
-      level: 1,
-      damage: config.damage,
-      range: config.range,
-      cost: config.cost,
-      cooldown: config.cooldown,
-      lastShotTime: 0,
-      targetId: null
-    };
-
-    setTowers(prev => [...prev, newTower]);
-    setStats(prev => ({
-      ...prev,
-      gold: prev.gold - config.cost
-    }));
-    setPlacingTowerType(null); // Reset placement selection
-  };
-
-  // Upgrading Tower logic
-  const handleUpgradeSelectedTower = () => {
-    if (!selectedTowerId) return;
-    const tower = towers.find(t => t.id === selectedTowerId);
-    if (!tower) return;
-
-    const upgradeCost = tower.cost * 2; // Next level upgrade cost is double current level cost
-    if (stats.gold < upgradeCost) {
-      alert('Not enough gold (MON)!');
-      return;
-    }
-
-    setTowers(prev => prev.map(t => {
-      if (t.id === selectedTowerId) {
-        return {
-          ...t,
-          level: t.level + 1,
-          damage: t.damage * 2, // Double the damage
-          cost: upgradeCost // Set cost to double
-        };
+      // Check level up
+      let xpNeeded = BigInt(level * 100);
+      let logsAdded: PetEventLog[] = [];
+      
+      while (xp >= xpNeeded) {
+        xp -= xpNeeded;
+        level += 1;
+        xpNeeded = BigInt(level * 100);
+        logsAdded.push({
+          type: 'levelup',
+          description: `Leveled Up! Your pet is now Level ${level}! 🎉`,
+          timestamp: Math.floor(Date.now() / 1000),
+          txHash: "0xsimulation"
+        });
       }
-      return t;
-    }));
 
-    setStats(prev => ({
-      ...prev,
-      gold: prev.gold - upgradeCost
-    }));
+      const updatedPet: PetStats = {
+        ...pet,
+        hunger,
+        hygiene,
+        energy,
+        level,
+        xp,
+        lastUpdated: BigInt(Math.floor(Date.now() / 1000))
+      };
 
-    // Trigger visual particles at tower location
-    const upgradedTower = towers.find(t => t.id === selectedTowerId);
-    if (upgradedTower && canvasRef.current) {
-      const effectColor = upgradedTower.type === 'chog' ? '#d8b4fe' : '#fef08a';
-      createExplosion(particlesRef.current, upgradedTower.x, upgradedTower.y, effectColor, 25);
+      const updatedLogs: PetEventLog[] = [
+        {
+          type: actionType,
+          description: logDesc,
+          timestamp: Math.floor(Date.now() / 1000),
+          txHash: "0xsimulation"
+        },
+        ...logsAdded,
+        ...eventLogs
+      ];
+
+      saveDemoPet(updatedPet, updatedLogs);
+      showToast(logDesc);
+      return;
     }
-  };
 
-  const handleSellSelectedTower = () => {
-    if (!selectedTowerId) return;
-    const tower = towers.find(t => t.id === selectedTowerId);
-    if (!tower) return;
+    // Web3 Mode
+    if (!walletConnected) return;
 
-    // Sell refunds 50% of the total cost (accumulated through upgrades)
-    const refund = Math.round(tower.cost / 2);
-    setTowers(prev => prev.filter(t => t.id !== selectedTowerId));
-    setStats(prev => ({
-      ...prev,
-      gold: prev.gold + refund
-    }));
-    setSelectedTowerId(null);
-  };
-
-  // Game Loop execution
-  useEffect(() => {
-    let animationFrameId: number;
-    let lastTime = performance.now();
-
-    const loop = (time: number) => {
-      const state = gameObjectsRef.current;
-      if (!state.stats.isGameStarted || state.stats.isGameOver || state.isPaused) {
-        lastTime = time;
-        animationFrameId = requestAnimationFrame(loop);
+    // Ensure correct network
+    const currentChain = await getCurrentChainId();
+    const targetChain = isMainnet ? MONAD_MAINNET_CONFIG.chainId : MONAD_TESTNET_CONFIG.chainId;
+    if (!currentChain || currentChain.toLowerCase() !== targetChain.toLowerCase()) {
+      const switched = await switchNetwork(isMainnet);
+      if (!switched) {
+        showToast(`Please switch wallet to Monad ${isMainnet ? "Mainnet" : "Testnet"}`);
         return;
       }
+    }
 
-      // Delta Time (scaled for 60 FPS normal speed)
-      const elapsed = time - lastTime;
-      lastTime = time;
+    if (actionType === 'play' && pet.energy < 10) {
+      showToast("Pet is too tired to play!");
+      return;
+    }
+
+    setIsTxPending(true);
+    setTxHash(null);
+    showToast(`Sending 0.01 MON tx to ${actionType} pet...`);
+
+    try {
+      let hash = "";
+      if (actionType === 'feed') {
+        hash = await feedPet(contractAddress);
+      } else if (actionType === 'clean') {
+        hash = await cleanPet(contractAddress);
+      } else if (actionType === 'sleep') {
+        hash = await sleepPet(contractAddress);
+        setIsSleepingState(true);
+      } else if (actionType === 'play') {
+        setIsPlayingAnim(true);
+        hash = await playWithPet(contractAddress);
+        setTimeout(() => setIsPlayingAnim(false), 3000);
+      }
+
+      setTxHash(hash);
       
-      const frameDelta = (elapsed / 16.666) * state.gameSpeed;
+      // wait a bit for confirmations and refresh
+      setTimeout(() => {
+        fetchPetData();
+        setIsTxPending(false);
+        setTxHash(null);
+        showToast("Tx Confirmed! Stats updated.");
+      }, 5000);
 
-      // 1. Spawning Logic
-      const now = Date.now();
-      const spawnInterval = 1200 / state.gameSpeed; // speed up spawns with speed toggles
-
-      if (enemiesToSpawnRef.current.length > 0 && now - lastSpawnTimeRef.current >= spawnInterval) {
-        const spawned = enemiesToSpawnRef.current.shift();
-        if (spawned) {
-          const pixelPath = getPixelPath();
-          const startPt = pixelPath[0];
-          
-          const newEnemy: Enemy = {
-            ...spawned,
-            id: Math.random().toString(36).substring(2, 9),
-            x: startPt.x,
-            y: startPt.y
-          };
-          
-          enemiesRef.current.push(newEnemy);
-          lastSpawnTimeRef.current = now; // update ref synchronously to prevent consecutive frame spawns
-        }
-      }
-
-      // 2. Physics & Engine update
-      const { updatedTowers, updatedEnemies, updatedProjectiles, updatedParticles } = updateGameEngine(
-        state.towers,
-        enemiesRef.current,
-        projectilesRef.current,
-        particlesRef.current,
-        time,
-        frameDelta,
-        // Base Damage callback
-        (dmg) => {
-          setStats(prev => {
-            const nextLives = Math.max(0, prev.lives - dmg);
-            const isOver = nextLives <= 0;
-            if (isOver) {
-              enemiesRef.current = [];
-              projectilesRef.current = [];
-              particlesRef.current = [];
-              enemiesToSpawnRef.current = [];
-            }
-            return {
-              ...prev,
-              lives: nextLives,
-              isGameOver: isOver
-            };
-          });
-        },
-        // Gold Gain callback
-        (amount) => {
-          setStats(prev => ({
-            ...prev,
-            gold: prev.gold + amount
-          }));
-        },
-        // Score Gain callback
-        (amount) => {
-          setStats(prev => ({
-            ...prev,
-            score: prev.score + amount
-          }));
-        }
-      );
-
-      // Mutate refs directly with updated states
-      enemiesRef.current = updatedEnemies;
-      projectilesRef.current = updatedProjectiles;
-      particlesRef.current = updatedParticles;
-
-      // Sync enemy count for React UI (only when it changes)
-      if (updatedEnemies.length !== enemyCount) {
-        setEnemyCount(updatedEnemies.length);
-      }
-
-      setTowers(updatedTowers);
-
-      // 3. Wave completion detection inside loop
-      if (
-        state.currentWaveLaunched &&
-        enemiesRef.current.length === 0 &&
-        enemiesToSpawnRef.current.length === 0
-      ) {
-        setCurrentWaveLaunched(false);
-        
-        if (state.autoStartNextWave) {
-          setStats(prev => {
-            const nextWave = prev.wave + 1;
-            enemiesToSpawnRef.current = generateWaveEnemies(nextWave);
-            lastSpawnTimeRef.current = 0; // trigger instantly
-            return {
-              ...prev,
-              wave: nextWave
-            };
-          });
-          setCurrentWaveLaunched(true);
-        } else {
-          // Manual next wave: increment wave number, but don't launch yet
-          setStats(prev => ({
-            ...prev,
-            wave: prev.wave + 1
-          }));
-        }
-      }
-
-      // 3. Render
-      const canvas = canvasRef.current;
-      if (canvas) {
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          // Check placement hover state validity
-          let isPlacingInvalid = false;
-          if (hoveredCell && placingTowerType) {
-            const isOccupied = state.towers.some(t => t.gridX === hoveredCell.x && t.gridY === hoveredCell.y);
-            const isOnPath = isCellOnPath(hoveredCell.x, hoveredCell.y);
-            isPlacingInvalid = isOccupied || isOnPath;
-          }
-
-          const selectedTower = state.selectedTowerId 
-            ? updatedTowers.find(t => t.id === state.selectedTowerId) || null 
-            : null;
-
-          drawGame(
-            ctx,
-            updatedTowers,
-            updatedEnemies,
-            updatedProjectiles,
-            updatedParticles,
-            hoveredCell,
-            selectedTower,
-            placingTowerType,
-            isPlacingInvalid
-          );
-        }
-      }
-
-      animationFrameId = requestAnimationFrame(loop);
-    };
-
-    if (stats.isGameStarted && !stats.isGameOver) {
-      animationFrameId = requestAnimationFrame(loop);
-    } else {
-      // Just draw background / grid when game is off
-      const canvas = canvasRef.current;
-      if (canvas) {
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          drawGame(ctx, [], [], [], [], null, null, null, false);
-        }
-      }
-    }
-
-    return () => cancelAnimationFrame(animationFrameId);
-  }, [stats.isGameStarted, stats.isGameOver, placingTowerType, hoveredCell]);
-
-  // Click on Canvas handlers
-  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!stats.isGameStarted || stats.isGameOver) return;
-
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const rect = canvas.getBoundingClientRect();
-    const clickX = e.clientX - rect.left;
-    const clickY = e.clientY - rect.top;
-
-    const gridX = Math.floor(clickX / CELL_SIZE);
-    const gridY = Math.floor(clickY / CELL_SIZE);
-
-    if (placingTowerType) {
-      // Placing mode
-      handlePlaceTower(gridX, gridY);
-    } else {
-      // Selection mode: check if click fell on a tower
-      const clickedTower = towers.find(t => t.gridX === gridX && t.gridY === gridY);
-      if (clickedTower) {
-        setSelectedTowerId(clickedTower.id);
-      } else {
-        setSelectedTowerId(null);
-      }
+    } catch (e: any) {
+      console.error(e);
+      showToast(e.reason || e.message || "Transaction failed or rejected");
+      setIsTxPending(false);
+      setIsPlayingAnim(false);
     }
   };
 
-  const handleCanvasMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!stats.isGameStarted || stats.isGameOver) return;
+  const handleClaimReward = async () => {
+    if (isDemoMode) {
+      showToast("Rewards are disabled in Demo Mode!");
+      return;
+    }
+    if (!walletConnected || !pet || !contractAddress) return;
+    
+    if (pet.level <= lastClaimedLevel) {
+      showToast("No rewards to claim yet!");
+      return;
+    }
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    // Ensure correct network
+    const currentChain = await getCurrentChainId();
+    const targetChain = isMainnet ? MONAD_MAINNET_CONFIG.chainId : MONAD_TESTNET_CONFIG.chainId;
+    if (!currentChain || currentChain.toLowerCase() !== targetChain.toLowerCase()) {
+      const switched = await switchNetwork(isMainnet);
+      if (!switched) {
+        showToast(`Please switch wallet to Monad ${isMainnet ? "Mainnet" : "Testnet"}`);
+        return;
+      }
+    }
 
-    const rect = canvas.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
+    setIsClaiming(true);
+    showToast("Sending transaction to claim your MON rewards...");
 
-    const gridX = Math.floor(mouseX / CELL_SIZE);
-    const gridY = Math.floor(mouseY / CELL_SIZE);
-
-    if (gridX >= 0 && gridX < GRID_COLS && gridY >= 0 && gridY < GRID_ROWS) {
-      setHoveredCell({ x: gridX, y: gridY });
-    } else {
-      setHoveredCell(null);
+    try {
+      await claimLevelReward(contractAddress);
+      showToast("Claim transaction submitted! Waiting for confirmation...");
+      
+      // wait a bit for confirmations and refresh
+      setTimeout(() => {
+        fetchPetData();
+        setIsClaiming(false);
+        showToast("Claim successful! Rewards transferred to your wallet.");
+      }, 5000);
+    } catch (e: any) {
+      console.error(e);
+      showToast(e.reason || e.message || "Claim transaction failed");
+      setIsClaiming(false);
     }
   };
 
-  const handleCanvasMouseLeave = () => {
-    setHoveredCell(null);
-  };
+  // Get pet face representation
+  const petRepresentation = pet ? getPetFace(pet, isPlayingAnim, isSleepingState) : { face: "( - _ - )", statusText: "NO PET" };
 
-  // Find currently selected tower object
-  const selectedTowerObj = selectedTowerId 
-    ? towers.find(t => t.id === selectedTowerId) 
-    : null;
-
+  // Level Up requirement calculation
+  const xpNeeded = pet ? pet.level * 100 : 100;
+  const xpPercent = pet ? (Number(pet.xp) / xpNeeded) * 100 : 0;
+  
+  // Happiness calculation (average of hunger, energy, hygiene)
+  const happiness = pet ? Math.round((pet.hunger + pet.hygiene + pet.energy) / 3) : 0;
 
   return (
-    <div className="app-container">
-      {/* HEADER SECTION */}
-      <header className="header">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <div style={{
-            width: '32px',
-            height: '32px',
-            background: 'var(--monad-purple)',
-            borderRadius: '6px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontWeight: 800,
-            fontSize: '1.2rem',
-            color: '#fff',
-            boxShadow: '0 0 10px var(--monad-purple-glow)'
-          }}>M</div>
-          <div>
-            <h1 style={{ margin: 0, fontSize: '1.2rem', fontWeight: 800, letterSpacing: '0.05em' }} className="glow-text-purple">
-              MONAD DEFENSE
-            </h1>
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Rise of Chog & Molandak</span>
-          </div>
-        </div>
+    <div className="game-layout-wrapper">
+      {/* Sidecar Detail Panel */}
+      {activePanel !== 'none' && (
+        <div className="crt-side-panel pixel-font">
+          <div className="crt-screen">
+            {activePanel === 'rewards' && (
+              <div className="details-panel" style={{ border: 'none', background: 'none', maxHeight: 'none', padding: 0, boxShadow: 'none' }}>
+                <div className="panel-title">🎁 PET REWARDS PORTAL</div>
+                <div style={{ padding: '8px 0', fontSize: '1.1rem', textAlign: 'center' }}>
+                  <div style={{ marginBottom: '12px', background: 'rgba(0, 0, 0, 0.4)', padding: '10px', border: '1px solid var(--border)', borderRadius: '4px' }}>
+                    <span style={{ color: 'var(--text-inactive)', display: 'block', fontSize: '0.65rem', textTransform: 'uppercase', fontFamily: '"Press Start 2P"', marginBottom: '4px' }}>Reward Pool Balance:</span>
+                    <span className="glow-gold" style={{ fontSize: '1.25rem', fontWeight: 'bold' }}>{contractBalance} MON</span>
+                  </div>
 
-        {/* Web3 Wallet and settings controls */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-          <div className="mode-toggle-container">
-            <button 
-              className={`mode-toggle-btn ${!isWeb3Mode ? 'active' : ''}`}
-              onClick={() => setIsWeb3Mode(false)}
-            >
-              Demo Play
-            </button>
-            <button 
-              className={`mode-toggle-btn ${isWeb3Mode ? 'active' : ''}`}
-              onClick={handleConnectWallet}
-            >
-              Web3 Mode
-            </button>
-          </div>
+                  <div style={{ textAlign: 'left', background: 'rgba(20, 7, 7, 0.6)', border: '2px solid #3c1616', padding: '10px', borderRadius: '6px', fontSize: '0.85rem', display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '15px' }}>
+                    <div>
+                      <span style={{ color: 'var(--text-inactive)', display: 'block', fontSize: '0.65rem', textTransform: 'uppercase', fontFamily: '"Press Start 2P"', marginBottom: '2px' }}>Your Pet Level:</span>
+                      <span style={{ color: 'var(--retro-cream)', fontWeight: 'bold' }}>Level {pet ? pet.level : 1}</span>
+                    </div>
+                    <div>
+                      <span style={{ color: 'var(--text-inactive)', display: 'block', fontSize: '0.65rem', textTransform: 'uppercase', fontFamily: '"Press Start 2P"', marginBottom: '2px' }}>Last Claimed Level:</span>
+                      <span style={{ color: 'var(--retro-cream)', fontWeight: 'bold' }}>Level {isDemoMode ? "1 (Demo)" : lastClaimedLevel}</span>
+                    </div>
+                    {pet && pet.level > lastClaimedLevel && !isDemoMode ? (
+                      <div style={{ borderTop: '1px dashed #3c1616', paddingTop: '8px', color: 'var(--neon-gold)' }}>
+                        <span style={{ display: 'block', fontSize: '0.65rem', fontWeight: 'bold', textTransform: 'uppercase', fontFamily: '"Press Start 2P"', marginBottom: '2px' }}>Claimable Amount:</span>
+                        <span style={{ fontSize: '1.1rem', fontWeight: 'bold' }}>
+                          {((pet.level - lastClaimedLevel) * 0.005).toFixed(3)} MON
+                        </span>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-inactive)', display: 'block', marginTop: '2px' }}>
+                          ({pet.level - lastClaimedLevel} level(s) x 0.005 MON)
+                        </span>
+                      </div>
+                    ) : (
+                      <div style={{ borderTop: '1px dashed #3c1616', paddingTop: '8px', color: 'var(--text-inactive)', fontSize: '0.7rem' }}>
+                        No rewards claimable. Level up your pet to claim!
+                      </div>
+                    )}
+                  </div>
 
-          {walletConnected ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              {networkError ? (
-                <button 
-                  onClick={handleSwitchNetwork}
-                  className="cyber-button"
-                  style={{ background: 'var(--neon-red)', padding: '6px 12px', fontSize: '0.75rem' }}
-                >
-                  <AlertTriangle size={14} /> Switch Network
-                </button>
-              ) : (
-                <div style={{
-                  background: 'rgba(34, 197, 94, 0.1)',
-                  border: '1px solid rgba(34, 197, 94, 0.3)',
-                  padding: '6px 12px',
-                  borderRadius: '6px',
-                  fontSize: '0.8rem',
-                  color: '#22c55e',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px'
-                }}>
-                  <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#22c55e' }} />
-                  {userAddress?.substring(0, 6)}...{userAddress?.substring(userAddress.length - 4)}
+                  {pet && pet.level > lastClaimedLevel && !isDemoMode ? (
+                    <button 
+                      onClick={handleClaimReward} 
+                      disabled={isClaiming}
+                      className="crt-btn active pixel-font" 
+                      style={{ 
+                        width: '100%', 
+                        padding: '12px', 
+                        fontSize: '0.85rem', 
+                        background: 'linear-gradient(to bottom, #d97706, #b45309)', 
+                        border: '2px solid #f59e0b', 
+                        color: 'white', 
+                        cursor: 'pointer', 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        justifyContent: 'center', 
+                        gap: '8px', 
+                        borderRadius: '4px',
+                        textShadow: '0 2px 4px rgba(0,0,0,0.5)',
+                        fontFamily: '"Press Start 2P"',
+                        marginBottom: '15px'
+                      }}
+                    >
+                      {isClaiming ? 'CLAIMING...' : '🎁 CLAIM REWARDS'}
+                    </button>
+                  ) : (
+                    <button 
+                      className="crt-btn pixel-font" 
+                      disabled 
+                      style={{ 
+                        width: '100%', 
+                        padding: '12px', 
+                        fontSize: '0.85rem', 
+                        opacity: 0.5, 
+                        cursor: 'not-allowed', 
+                        borderRadius: '4px',
+                        marginBottom: '15px'
+                      }}
+                    >
+                      {isDemoMode ? 'DISABLED IN DEMO' : 'LEVEL UP TO CLAIM'}
+                    </button>
+                  )}
+
+                  <div style={{ background: '#140707', border: '2px solid #3c1616', padding: '10px', borderRadius: '6px', textAlign: 'left', fontSize: '0.8rem', display: 'flex', flexDirection: 'column', gap: '8px', boxShadow: 'inset 0 0 10px rgba(0,0,0,0.8)' }}>
+                    <div>
+                      <span style={{ color: 'var(--text-inactive)', display: 'block', fontSize: '0.65rem', textTransform: 'uppercase', fontFamily: '"Press Start 2P"', marginBottom: '4px' }}>Project Fee Receiver:</span>
+                      <span className="glow-gold" style={{ wordBreak: 'break-all', fontFamily: 'monospace', fontSize: '0.85rem' }}>0x76011d0Dc2ca7AdAE7f0C408c872040Bc16437D1</span>
+                    </div>
+                    <div style={{ borderTop: '1px dashed #3c1616', paddingTop: '8px' }}>
+                      <span style={{ color: 'var(--text-inactive)', display: 'block', fontSize: '0.65rem', textTransform: 'uppercase', fontFamily: '"Press Start 2P"', marginBottom: '4px' }}>Reward Payout Address:</span>
+                      <span className="glow-amber" style={{ wordBreak: 'break-all', fontFamily: 'monospace', fontSize: '0.85rem' }}>0x76011d0Dc2ca7AdAE7f0C408c872040Bc16437D1</span>
+                    </div>
+                    <div style={{ borderTop: '1px dashed #3c1616', paddingTop: '8px', color: 'var(--text-inactive)', fontSize: '0.7rem', lineHeight: '1.3' }}>
+                      * Để nạp tiền vào quỹ thưởng, Admin gửi MON trực tiếp từ MetaMask tới địa chỉ Hợp đồng:<br/>
+                      <span style={{ color: 'var(--neon-gold)', fontFamily: 'monospace', wordBreak: 'break-all', fontSize: '0.75rem', display: 'block', marginTop: '4px' }}>{contractAddress}</span>
+                    </div>
+                  </div>
                 </div>
-              )}
-            </div>
-          ) : (
-            isWeb3Mode && (
-              <button onClick={handleConnectWallet} className="cyber-button" style={{ padding: '6px 12px', fontSize: '0.75rem' }}>
-                Connect Wallet
-              </button>
-            )
-          )}
-
-          <button 
-            onClick={() => setShowSettings(!showSettings)} 
-            className="cyber-button-outline"
-            style={{ padding: '8px' }}
-            title="Settings"
-          >
-            <Settings size={18} />
-          </button>
-        </div>
-      </header>
-
-      {/* SETTINGS OVERLAY PANEL */}
-      {showSettings && (
-        <div style={{
-          position: 'absolute',
-          top: '80px',
-          right: '24px',
-          width: '320px',
-          zIndex: 50,
-          padding: '20px',
-        }} className="glass-panel pulsing-border">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-            <h3 style={{ margin: 0, fontSize: '1rem', color: 'var(--monad-purple)' }}>Smart Contract Settings</h3>
-            <button onClick={() => setShowSettings(false)} style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer' }}>×</button>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-              Monad Testnet RPC:
-            </label>
-            <div style={{ fontSize: '0.75rem', background: 'rgba(0,0,0,0.2)', padding: '6px', borderRadius: '4px', overflowX: 'auto' }}>
-              {MONAD_TESTNET_CONFIG.rpcUrls[0]}
-            </div>
-            
-            <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-              Contract Address ($MON game registry):
-            </label>
-            <input 
-              type="text" 
-              value={contractAddress}
-              onChange={(e) => setContractAddress(e.target.value)}
-              style={{
-                background: 'var(--bg-darker)',
-                border: '1px solid rgba(131, 110, 253, 0.4)',
-                borderRadius: '6px',
-                padding: '8px',
-                color: '#fff',
-                fontSize: '0.8rem',
-                outline: 'none'
-              }}
-            />
-            <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-              Modify this to point to your custom contract deployed on Monad testnet.
-            </span>
+              </div>
+            )}
+            {activePanel === 'leaderboard' && (
+              <div className="details-panel" style={{ border: 'none', background: 'none', maxHeight: 'none', padding: 0, boxShadow: 'none' }}>
+                <div className="panel-title">TOP 10 MONANIMAL LEADERBOARD</div>
+                {leaderboard.length === 0 ? (
+                  <div style={{ textAlign: 'center', color: 'var(--text-inactive)' }}>LEADERBOARD EMPTY</div>
+                ) : (
+                  leaderboard.map((entry, index) => {
+                    const isUser = userAddress && entry.owner.toLowerCase() === userAddress.toLowerCase();
+                    const isDemoUser = isDemoMode && entry.owner === "you (demo)";
+                    
+                    return (
+                      <div 
+                        key={index} 
+                        className="leaderboard-item"
+                        style={{ background: (isUser || isDemoUser) ? 'rgba(245,158,11,0.1)' : 'transparent' }}
+                      >
+                        <span className="lb-rank">#{index + 1}</span>
+                        <div className="lb-info">
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <img 
+                              src="/chog.png" 
+                              alt="Chog" 
+                              style={{ width: '20px', height: '20px', objectFit: 'contain', imageRendering: 'pixelated' }} 
+                            />
+                            <span className="lb-name" style={{ color: (isUser || isDemoUser) ? 'var(--neon-gold)' : 'inherit' }}>
+                              {entry.petName}
+                            </span>
+                          </div>
+                          <span className="lb-owner">
+                            {isDemoUser ? "you (demo)" : `${entry.owner.substring(0, 6)}...${entry.owner.substring(entry.owner.length - 4)}`}
+                          </span>
+                        </div>
+                        <span className="lb-level">LVL {entry.level}</span>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            )}
+            {activePanel === 'logs' && (
+              <div className="details-panel" style={{ border: 'none', background: 'none', maxHeight: 'none', padding: 0, boxShadow: 'none' }}>
+                <div className="panel-title">PET ACTIVITY EVENT LOG</div>
+                {eventLogs.length === 0 ? (
+                  <div style={{ textAlign: 'center', color: 'var(--text-inactive)' }}>NO ACTIONS RECORDED YET</div>
+                ) : (
+                  eventLogs.map((log, index) => {
+                    const time = new Date(log.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                    return (
+                      <div key={index} className="log-item">
+                        <span className="log-time">[{time}]</span>
+                        <span>{log.description}</span>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}
 
-      {/* MAIN SCREEN AREA */}
-      <main className="game-main">
-        {/* LEFT COLUMN: CANVAS + BOTTOM CONTROLS */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          
-          {/* STATS OVERVIEW BAR */}
-          <div className="glass-panel" style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 24px', alignItems: 'center' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Coins size={18} className="glow-text-yellow" style={{ color: 'var(--neon-yellow)' }} />
-              <div style={{ display: 'flex', flexDirection: 'column' }}>
-                <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>In-Game Gold</span>
-                <span className="mono-font" style={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'var(--neon-yellow)' }}>{stats.gold} MON</span>
-              </div>
-            </div>
+      <div className="crt-container">
+        {/* Left Side Tabs Menu */}
+        {(walletConnected || isDemoMode) && pet && (
+          <>
+            <button 
+              className={`side-tab tab-rewards pixel-font ${activePanel === 'rewards' ? 'active' : ''}`}
+              onClick={() => setActivePanel(activePanel === 'rewards' ? 'none' : 'rewards')}
+            >
+              🎁 REWARD
+            </button>
+            <button 
+              className={`side-tab tab-leaderboard pixel-font ${activePanel === 'leaderboard' ? 'active' : ''}`}
+              onClick={() => setActivePanel(activePanel === 'leaderboard' ? 'none' : 'leaderboard')}
+            >
+              🏆 LEADER
+            </button>
+            <button 
+              className={`side-tab tab-logs pixel-font ${activePanel === 'logs' ? 'active' : ''}`}
+              onClick={() => setActivePanel(activePanel === 'logs' ? 'none' : 'logs')}
+            >
+              📜 LOGS
+            </button>
+          </>
+        )}
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Shield size={18} style={{ color: 'var(--neon-red)' }} />
-              <div style={{ display: 'flex', flexDirection: 'column' }}>
-                <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Lives</span>
-                <span className="mono-font" style={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'var(--neon-red)' }}>{stats.lives} / 20</span>
-              </div>
-            </div>
+        {/* Toast Alert */}
+      {toast && (
+        <div className="retro-toast pixel-font">
+          {toast}
+        </div>
+      )}
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Flame size={18} style={{ color: 'var(--monad-purple)' }} />
-              <div style={{ display: 'flex', flexDirection: 'column' }}>
-                <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Current Wave</span>
-                <span className="mono-font" style={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'var(--monad-purple)' }}>{stats.wave || '--'}</span>
-              </div>
-            </div>
+      {/* Retro Title Bar */}
+      <div className="retro-header">
+        <div>
+          <h1 className="title-font glow-gold" style={{ margin: 0, fontSize: '0.95rem' }}>
+            MONANIMAL PET
+          </h1>
+          <span className="pixel-font glow-amber" style={{ fontSize: '0.9rem' }}>
+            On Monad {isMainnet ? "Mainnet" : "Testnet"}
+          </span>
+        </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <TrendingUp size={18} style={{ color: 'var(--neon-green)' }} />
-              <div style={{ display: 'flex', flexDirection: 'column' }}>
-                <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Score</span>
-                <span className="mono-font" style={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'var(--neon-green)' }}>{stats.score}</span>
-              </div>
+        <div className="retro-top-controls">
+          <button className="retro-icon-btn" title="Info" onClick={() => setShowInfo(!showInfo)}>I</button>
+          {(walletConnected || isDemoMode) && (
+            <button className="retro-icon-btn" title="Disconnect/Reset" onClick={handleExit}>X</button>
+          )}
+        </div>
+      </div>
+
+      <div className="crt-screen pixel-font">
+        {/* Info panel overlay */}
+        {showInfo && (
+          <div className="details-panel" style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 30, maxHeight: 'none' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dashed #4a1d1d', paddingBottom: '6px', marginBottom: '8px' }}>
+              <span className="glow-gold" style={{ fontFamily: 'Press Start 2P', fontSize: '0.55rem' }}>GAME GUIDE</span>
+              <span style={{ cursor: 'pointer', color: '#ef4444' }} onClick={() => setShowInfo(false)}>✕ Close</span>
             </div>
+            <p style={{ margin: '4px 0', fontSize: '1rem' }}>- Every care action is a real EVM transaction costing 0.01 MON.</p>
+            <p style={{ margin: '4px 0', fontSize: '1rem' }}>- <b>Feed</b>: hunger +20, +5 XP.</p>
+            <p style={{ margin: '4px 0', fontSize: '1rem' }}>- <b>Clean</b>: hygiene +20, +5 XP.</p>
+            <p style={{ margin: '4px 0', fontSize: '1rem' }}>- <b>Sleep</b>: energy +30, +3 XP.</p>
+            <p style={{ margin: '4px 0', fontSize: '1rem' }}>- <b>Play</b>: energy -10, +10 XP, decreases either hunger or hygiene by -10.</p>
+            <p style={{ margin: '4px 0', fontSize: '1rem' }}>- Stats decay slowly in real-time on-chain!</p>
+            <p style={{ margin: '4px 0', fontSize: '1rem' }}>- Level up resets XP based on formula <code>level * 100</code>.</p>
+            <p style={{ margin: '4px 0', fontSize: '1rem' }}>- Top 10 pets are saved in the on-chain leaderboard.</p>
           </div>
+        )}
 
-          {/* GAME WINDOW */}
-          <div className="canvas-container pulsing-border">
-            <canvas 
-              ref={canvasRef} 
-              width={CANVAS_WIDTH} 
-              height={CANVAS_HEIGHT} 
-              onClick={handleCanvasClick}
-              onMouseMove={handleCanvasMouseMove}
-              onMouseLeave={handleCanvasMouseLeave}
-              style={{ display: 'block', cursor: placingTowerType ? 'crosshair' : 'default' }}
-            />
-            
-            {/* Grid grid lines aesthetics */}
-            <div className="grid-overlay" />
-            <div className="scanline-effect" />
-
-            {/* PRE-GAME OVERLAY */}
-            {!stats.isGameStarted && (
-              <div style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                width: '100%',
-                height: '100%',
-                background: 'rgba(6, 4, 10, 0.85)',
-                display: 'flex',
-                flexDirection: 'column',
-                justifyContent: 'center',
-                alignItems: 'center',
-                padding: '40px',
-                textAlign: 'center',
-                zIndex: 20
-              }}>
-                <Sparkles size={48} className="floating" style={{ color: 'var(--monad-purple)', marginBottom: '16px' }} />
-                <h2 style={{ fontSize: '2rem', fontWeight: 800, margin: '0 0 10px 0', letterSpacing: '0.05em' }}>
-                  MONAD TOWER DEFENSE
-                </h2>
-                <p style={{ color: 'var(--text-secondary)', maxWidth: '460px', margin: '0 0 24px 0', fontSize: '0.95rem', lineHeight: 1.5 }}>
-                  Defend the Monad blockchain from malicious nodes! In Web3 mode, a fee of <strong style={{ color: '#fff' }}>0.01 MON Testnet</strong> is required to initialize the game.
-                </p>
-
-                <div style={{ display: 'flex', gap: '16px', justifyContent: 'center', width: '100%' }}>
-                  {!isWeb3Mode ? (
-                    <button 
-                      onClick={handleStartGame} 
-                      className="cyber-button"
-                      style={{ fontSize: '1rem', padding: '12px 28px' }}
-                    >
-                      <Play size={18} fill="#fff" /> Play Demo Free
-                    </button>
-                  ) : (
-                    <button 
-                      onClick={handleStartGame} 
-                      className="cyber-button"
-                      disabled={isTxPending || networkError}
-                      style={{ fontSize: '1rem', padding: '12px 28px' }}
-                    >
-                      {isTxPending ? 'Awaiting Confirm...' : (
-                        <>
-                          <Play size={18} fill="#fff" /> Pay 0.01 $MON & Play
-                        </>
-                      )}
-                    </button>
-                  )}
-                </div>
-
-                {isWeb3Mode && networkError && (
-                  <div style={{ color: 'var(--neon-red)', fontSize: '0.85rem', marginTop: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <AlertTriangle size={14} /> Please switch wallet network to Monad Testnet to play Web3.
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* BLOCKCHAIN LOADING OVERLAY */}
-            {isTxPending && (
-              <div style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                width: '100%',
-                height: '100%',
-                background: 'rgba(6, 4, 10, 0.9)',
-                display: 'flex',
-                flexDirection: 'column',
-                justifyContent: 'center',
-                alignItems: 'center',
-                zIndex: 30
-              }}>
-                <div style={{
-                  width: '50px',
-                  height: '50px',
-                  border: '3px solid rgba(131, 110, 253, 0.1)',
-                  borderTop: '3px solid var(--monad-purple)',
-                  borderRadius: '50%',
-                  animation: 'spin 1s linear infinite',
-                  marginBottom: '20px'
-                }} className="spinner-animation" />
-                <h3 style={{ margin: '0 0 10px 0', fontSize: '1.2rem' }}>Confirming On-Chain Game Start</h3>
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', maxWidth: '360px', textAlign: 'center', margin: '0 0 14px 0' }}>
-                  Please approve the transaction in MetaMask/Rabby. Sending 0.01 MON on Monad Testnet...
-                </p>
-                {txHash && (
-                  <a 
-                    href={`${MONAD_TESTNET_CONFIG.blockExplorerUrls[0]}/tx/${txHash}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    style={{
-                      color: 'var(--monad-purple)',
-                      fontSize: '0.8rem',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '4px',
-                      textDecoration: 'none'
-                    }}
-                    className="hover:underline"
-                  >
-                    View Tx on Explorer <Link size={12} />
-                  </a>
-                )}
-              </div>
-            )}
-
-            {/* GAME OVER OVERLAY */}
-            {stats.isGameOver && (
-              <div style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                width: '100%',
-                height: '100%',
-                background: 'rgba(239, 68, 68, 0.15)',
-                backdropFilter: 'blur(10px)',
-                display: 'flex',
-                flexDirection: 'column',
-                justifyContent: 'center',
-                alignItems: 'center',
-                zIndex: 20
-              }}>
-                <h2 style={{ fontSize: '3rem', fontWeight: 900, color: 'var(--neon-red)', margin: '0 0 8px 0', letterSpacing: '0.1em' }} className="glow-text-red">
-                  BASE BREACHED
-                </h2>
-                <p style={{ fontSize: '1.1rem', color: '#fff', marginBottom: '24px' }}>
-                  You held off nodes until <strong style={{ color: 'var(--monad-purple)' }}>Wave {stats.wave}</strong> with a score of <strong style={{ color: 'var(--neon-green)' }}>{stats.score}</strong>!
-                </p>
-                <button 
-                  onClick={handleStartGame} 
-                  className="cyber-button"
-                  style={{ padding: '12px 28px', fontSize: '1rem' }}
-                >
-                  <RotateCcw size={16} /> Deploy Again
-                </button>
-              </div>
-            )}
+        {/* Loading overlay */}
+        {isLoading && (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '300px' }}>
+            <Loader2 className="pixel-spinner" size={32} style={{ color: 'var(--neon-gold)' }} />
+            <span style={{ marginTop: '12px' }}>FETCHING ON-CHAIN STATS...</span>
           </div>
+        )}
 
-          {/* LOWER CONTROLS & TIMING BAR */}
-          <div className="glass-panel" style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 20px', alignItems: 'center' }}>
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-              <button 
-                onClick={() => setIsPaused(!isPaused)} 
-                className="cyber-button-outline"
-                style={{ minWidth: '80px' }}
-                disabled={!stats.isGameStarted || stats.isGameOver}
+        {/* Tx Pending overlay */}
+        {isTxPending && !isLoading && (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '300px', textAlign: 'center' }}>
+            <Tv size={36} className="pixel-spinner" style={{ color: 'var(--neon-gold)' }} />
+            <span style={{ marginTop: '12px', color: 'var(--neon-gold)', fontFamily: 'Press Start 2P', fontSize: '0.65rem' }}>TRANSACTION PENDING</span>
+            <span style={{ fontSize: '0.9rem', marginTop: '8px' }}>Waiting for block confirmation on Monad...</span>
+            {txHash && (
+              <a 
+                href={`${isMainnet ? MONAD_MAINNET_CONFIG.blockExplorerUrls[0] : MONAD_TESTNET_CONFIG.blockExplorerUrls[0]}/tx/${txHash}`} 
+                target="_blank" 
+                rel="noreferrer"
+                style={{ color: 'var(--neon-amber)', textDecoration: 'underline', marginTop: '10px', fontSize: '0.85rem' }}
               >
-                {isPaused ? 'Resume' : 'Pause'}
+                View on Explorer
+              </a>
+            )}
+          </div>
+        )}
+
+        {/* Landing State: Connect Wallet or Demo Mode */}
+        {!walletConnected && !isDemoMode && !isLoading && !isTxPending && (
+          <div className="wallet-screen">
+            <p style={{ fontSize: '1.2rem', marginBottom: '16px' }}>
+              Welcome to <b>Monanimal Pet</b>!<br />
+              Take care of your virtual pet fully on-chain. Every care action costs exactly 0.01 MON.
+            </p>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', alignItems: 'center', marginTop: '24px' }}>
+              <button className="cyber-connect-btn" onClick={handleConnect}>
+                CONNECT WALLET
               </button>
-              
-              <div style={{ display: 'flex', background: 'var(--bg-panel-light)', borderRadius: '6px', padding: '2px' }}>
+
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', fontSize: '0.85rem', color: 'var(--text-inactive)', marginTop: '8px' }}>
+                <span>Target: Monad {isMainnet ? "Mainnet" : "Testnet"}</span>
                 <button 
-                  onClick={() => setGameSpeed(1)} 
-                  className={`mode-toggle-btn ${gameSpeed === 1 ? 'active' : ''}`}
-                  style={{ padding: '6px 12px', borderRadius: '4px' }}
-                  disabled={!stats.isGameStarted || stats.isGameOver}
+                  onClick={toggleNetwork} 
+                  style={{
+                    background: 'var(--retro-panel)',
+                    border: '1px solid #582424',
+                    color: 'var(--retro-cream)',
+                    padding: '2px 8px',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontSize: '0.85rem'
+                  }}
                 >
-                  1x Speed
-                </button>
-                <button 
-                  onClick={() => setGameSpeed(2)} 
-                  className={`mode-toggle-btn ${gameSpeed === 2 ? 'active' : ''}`}
-                  style={{ padding: '6px 12px', borderRadius: '4px' }}
-                  disabled={!stats.isGameStarted || stats.isGameOver}
-                >
-                  2x Speed
+                  Switch
                 </button>
               </div>
+
+              <span style={{ margin: '8px 0', color: 'var(--text-inactive)' }}>- OR -</span>
+
+              <button 
+                onClick={() => setIsDemoMode(true)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--neon-gold)',
+                  textDecoration: 'underline',
+                  cursor: 'pointer',
+                  fontSize: '1.1rem'
+                }}
+              >
+                PLAY DEMO MODE (SIMULATED)
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Pet Creation State */}
+        {(walletConnected || isDemoMode) && !pet && !isLoading && !isTxPending && (
+          <div>
+            <div style={{ borderBottom: '1px dashed #4a1d1d', paddingBottom: '8px', marginBottom: '12px', textAlign: 'center' }}>
+              <span className="glow-gold" style={{ fontFamily: 'Press Start 2P', fontSize: '0.65rem' }}>CREATE YOUR PET</span>
             </div>
 
-            {/* Next Wave triggers */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-              {stats.isGameStarted && !stats.isGameOver && (
-                <>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                    <input 
-                      type="checkbox" 
-                      checked={autoStartNextWave} 
-                      onChange={(e) => setAutoStartNextWave(e.target.checked)}
-                      style={{
-                        accentColor: 'var(--monad-purple)',
-                        width: '15px',
-                        height: '15px',
-                        cursor: 'pointer'
-                      }}
+            <p style={{ textAlign: 'center', fontSize: '1.1rem', margin: '8px 0' }}>
+              Enter your pet name to summon your Chog guardian:
+            </p>
+
+            <input 
+              type="text" 
+              placeholder="ENTER PET NAME..." 
+              value={createName}
+              onChange={(e) => setCreateName(e.target.value)}
+              className="pet-name-input"
+              maxLength={20}
+            />
+
+            <div className="skin-selector" style={{ display: 'flex', justifyContent: 'center' }}>
+              {STARTER_SKINS.map((skin) => (
+                <div 
+                  key={skin.id}
+                  className="skin-card selected"
+                  style={{ width: '140px', cursor: 'default' }}
+                >
+                  <div className="skin-icon-container" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', margin: '8px 0', height: '60px' }}>
+                    <img 
+                      src="/chog.png" 
+                      alt={skin.name} 
+                      style={{ width: '55px', height: '55px', objectFit: 'contain', imageRendering: 'pixelated' }} 
                     />
-                    Auto-start waves
-                  </label>
-
-                  <button 
-                    onClick={launchCurrentWave}
-                    className="cyber-button"
-                    disabled={currentWaveLaunched}
-                    style={{
-                      background: currentWaveLaunched 
-                        ? 'var(--bg-panel-light)' 
-                        : 'linear-gradient(135deg, var(--monad-purple-deep) 0%, var(--monad-purple) 100%)',
-                      boxShadow: currentWaveLaunched ? 'none' : '0 0 15px var(--monad-purple-glow)',
-                      minWidth: '160px'
-                    }}
-                  >
-                    {currentWaveLaunched ? (
-                      <span style={{ fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '6px', justifyContent: 'center' }}>
-                        Defending... ({enemyCount} left)
-                      </span>
-                    ) : (
-                      <span style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700, justifyContent: 'center' }}>
-                        START WAVE {stats.wave} <ChevronRight size={18} />
-                      </span>
-                    )}
-                  </button>
-                </>
-              )}
+                  </div>
+                  <div className="skin-name" style={{ color: 'var(--neon-gold)', fontSize: '0.8rem', fontFamily: 'Press Start 2P' }}>
+                    {skin.name}
+                  </div>
+                </div>
+              ))}
             </div>
+
+            <p style={{ textAlign: 'center', fontSize: '0.95rem', color: 'var(--text-inactive)', margin: '8px 0 16px 0' }}>
+              {STARTER_SKINS[0].desc}
+            </p>
+
+            <button className="cyber-connect-btn" style={{ width: '100%' }} onClick={handleCreatePet}>
+              SUMMON PET
+            </button>
           </div>
-        </div>
+        )}
 
-        {/* RIGHT COLUMN: SHOP + SELECTED TOWER UPGRADE INTERFACE */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          
-          {/* TOWER SHOP */}
-          <div className="glass-panel" style={{ padding: '20px' }}>
-            <h3 style={{ margin: '0 0 14px 0', fontSize: '1.1rem', borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: '8px' }}>
-              Tower Assembly
-            </h3>
-            
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              {/* CHOG CARD */}
-              <div 
-                className={`tower-card chog-border ${placingTowerType === 'chog' ? 'selected' : ''}`}
-                onClick={() => {
-                  setSelectedTowerId(null);
-                  setPlacingTowerType(placingTowerType === 'chog' ? null : 'chog');
-                }}
-              >
-                <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                  <img src="/chog.png" style={{ width: '32px', height: '32px', borderRadius: '4px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(168,85,247,0.3)', objectFit: 'cover' }} alt="Chog" />
-                  <div style={{ flex: 1 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <strong style={{ color: '#c084fc', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        Chog
-                      </strong>
-                      <span className="mono-font" style={{ color: 'var(--neon-yellow)', fontWeight: 'bold' }}>
-                        100 MON
-                      </span>
-                    </div>
-                    <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-                      {Configs.chog.description}
-                    </p>
-                  </div>
-                </div>
-                <div style={{ display: 'flex', gap: '10px', fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '4px', paddingLeft: '42px' }}>
-                  <span>Dmg: {Configs.chog.damage}</span>
-                  <span>Range: {Configs.chog.range}</span>
-                  <span>CD: {Configs.chog.cooldown}ms</span>
-                </div>
+        {/* Main Care Dashboard */}
+        {(walletConnected || isDemoMode) && pet && !isLoading && !isTxPending && (
+          <div>
+            {/* Sub Header Cards Row */}
+            <div className="sub-header-row">
+              <div className="sub-header-card card-day">
+                <span className="card-label">Level</span>
+                <span className="card-value glow-gold">{pet.level}</span>
               </div>
-
-              {/* MOLANDAK CARD */}
-              <div 
-                className={`tower-card molandak-border ${placingTowerType === 'molandak' ? 'selected' : ''}`}
-                onClick={() => {
-                  setSelectedTowerId(null);
-                  setPlacingTowerType(placingTowerType === 'molandak' ? null : 'molandak');
-                }}
-              >
-                <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                  <img src="/molandak.png" style={{ width: '32px', height: '32px', borderRadius: '4px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(234,179,8,0.3)', objectFit: 'cover' }} alt="Molandak" />
-                  <div style={{ flex: 1 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <strong style={{ color: 'var(--neon-yellow)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        Molandak
-                      </strong>
-                      <span className="mono-font" style={{ color: 'var(--neon-yellow)', fontWeight: 'bold' }}>
-                        150 MON
-                      </span>
-                    </div>
-                    <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-                      {Configs.molandak.description}
-                    </p>
-                  </div>
-                </div>
-                <div style={{ display: 'flex', gap: '10px', fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '4px', paddingLeft: '42px' }}>
-                  <span>Dmg: {Configs.molandak.damage}</span>
-                  <span>Range: {Configs.molandak.range}</span>
-                  <span>CD: {Configs.molandak.cooldown}ms</span>
-                </div>
+              <div className="sub-header-card card-age">
+                <span className="card-label">Age</span>
+                <span className="card-value" style={{ fontSize: '0.9rem' }}>{petAgeString}</span>
+              </div>
+              <div className="sub-header-card card-energy-info">
+                <span className="card-label">Status Monitor</span>
+                <span className="card-value glow-amber" style={{ fontSize: '0.85rem', textTransform: 'uppercase' }}>
+                  {isSleepingState ? "Sleeping (+30 En)" : "Decaying Slowly"}
+                </span>
               </div>
             </div>
 
-            {placingTowerType && (
-              <div style={{
-                marginTop: '14px',
-                padding: '10px',
-                background: 'rgba(131, 110, 253, 0.1)',
-                border: '1px solid rgba(131, 110, 253, 0.3)',
-                borderRadius: '6px',
-                fontSize: '0.8rem',
-                color: 'var(--monad-purple)'
+            {/* Pet Screen */}
+            <div className="pet-screen-frame">
+              <div className="pet-screen-circle" style={{ overflow: 'hidden', display: 'flex', justifyContent: 'center', alignItems: 'center', position: 'relative' }}>
+                <img 
+                  src="/chog.png" 
+                  alt="Chog" 
+                  className={`pet-avatar-img ${isPlayingAnim ? 'playing' : ''} ${isSleepingState ? 'sleeping' : ''}`}
+                  style={{
+                    width: '100%',
+                    height: '100%',
+                    borderRadius: '50%',
+                    objectFit: 'cover',
+                    imageRendering: 'pixelated',
+                    filter: isSleepingState ? 'brightness(0.6)' : 'none',
+                    animation: isSleepingState ? 'none' : isPlayingAnim ? 'petPlay 0.5s infinite alternate' : 'petFloat 3s infinite ease-in-out'
+                  }}
+                />
+                {isSleepingState && (
+                  <div className="sleeping-bubbles" style={{ position: 'absolute', top: '10px', right: '15px', color: 'var(--neon-gold)', fontSize: '0.9rem', fontFamily: 'Press Start 2P', animation: 'floatSleep 2s infinite ease-in-out' }}>
+                    zZZ
+                  </div>
+                )}
+              </div>
+              <span className="pet-status-text glow-gold">
+                {pet.name.toUpperCase()}: {petRepresentation.statusText}
+              </span>
+            </div>
+
+            {/* Stats countdown header */}
+            <div className="status-decay-bar">
+              <span className="decay-label">{decayString}</span>
+              <span className="decay-label glow-gold" style={{ fontFamily: 'Press Start 2P', fontSize: '0.5rem', marginTop: '5px' }}>
+                CURRENT XP Level {pet.level}
+              </span>
+            </div>
+
+            {/* Progress Bars */}
+            <div className="stats-container">
+              {/* Hunger */}
+              <div className="stat-row">
+                <span className="stat-name">Hunger</span>
+                <span className="stat-percent">{pet.hunger}%</span>
+                <div className="bar-track">
+                  <div className="bar-fill" style={{ width: `${pet.hunger}%` }} />
+                </div>
+              </div>
+
+              {/* Happiness */}
+              <div className="stat-row">
+                <span className="stat-name">Happiness</span>
+                <span className="stat-percent">{happiness}%</span>
+                <div className="bar-track">
+                  <div className="bar-fill" style={{ width: `${happiness}%`, background: 'linear-gradient(90deg, #b45309 0%, #fbbf24 100%)' }} />
+                </div>
+              </div>
+
+              {/* Energy */}
+              <div className="stat-row">
+                <span className="stat-name">Energy</span>
+                <span className="stat-percent">{pet.energy}%</span>
+                <div className="bar-track">
+                  <div className="bar-fill" style={{ width: `${pet.energy}%`, background: 'linear-gradient(90deg, #0f766e, #2dd4bf)' }} />
+                </div>
+              </div>
+
+              {/* Hygiene */}
+              <div className="stat-row">
+                <span className="stat-name">Hygiene</span>
+                <span className="stat-percent">{pet.hygiene}%</span>
+                <div className="bar-track">
+                  <div className="bar-fill" style={{ width: `${pet.hygiene}%`, background: 'linear-gradient(90deg, #1d4ed8, #60a5fa)' }} />
+                </div>
+              </div>
+
+              {/* XP Bar */}
+              <div className="stat-row" style={{ marginTop: '4px' }}>
+                <span className="stat-name" style={{ color: 'var(--text-active)' }}>XP Bar</span>
+                <span className="stat-percent" style={{ color: 'var(--text-active)' }}>
+                  {Number(pet.xp)}/{xpNeeded}
+                </span>
+                <div className="bar-track" style={{ borderColor: 'var(--text-active)' }}>
+                  <div className="bar-fill" style={{ width: `${xpPercent}%`, background: 'linear-gradient(90deg, #84cc16 0%, #a3e635 100%)' }} />
+                </div>
+              </div>
+            </div>
+
+            {/* Action Buttons Grid */}
+            <div className="action-grid">
+              <button className="retro-btn" onClick={() => handleAction('feed')} disabled={pet.hunger >= 100}>
+                FEED
+              </button>
+              <button className="retro-btn" onClick={() => handleAction('clean')} disabled={pet.hygiene >= 100}>
+                CLEAN
+              </button>
+              <button className="retro-btn" onClick={() => handleAction('play')} disabled={pet.energy < 10}>
+                PLAY
+              </button>
+              <button className="retro-btn" onClick={() => {
+                if (isSleepingState) {
+                  setIsSleepingState(false);
+                  showToast("Woke up pet!");
+                } else {
+                  handleAction('sleep');
+                }
               }}>
-                Click on any open dark grid cell on the map to construct the tower.
-              </div>
-            )}
+                {isSleepingState ? "WAKE" : "SLEEP"}
+              </button>
+            </div>
+
+            {/* Sidecar Detail Panel handles Event Logs, Leaderboard and Rewards */}
           </div>
+        )}
+      </div>
+    </div>
 
-          {/* UPGRADE / SELL SELECTED TOWER CONTROL PANEL */}
-          <div className="glass-panel" style={{ padding: '20px', minHeight: '220px', display: 'flex', flexDirection: 'column' }}>
-            <h3 style={{ margin: '0 0 14px 0', fontSize: '1.1rem', borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: '8px' }}>
-              Turret Controller
-            </h3>
-
-            {selectedTowerObj ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', flex: 1 }}>
-                <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                  <img 
-                    src={selectedTowerObj.type === 'chog' ? '/chog.png' : '/molandak.png'} 
-                    style={{
-                      width: '40px',
-                      height: '40px',
-                      borderRadius: '6px',
-                      background: 'rgba(255,255,255,0.05)',
-                      border: `1px solid ${selectedTowerObj.type === 'chog' ? '#a855f7' : '#eab308'}`,
-                      objectFit: 'cover'
-                    }}
-                    alt={selectedTowerObj.type}
-                  />
-                  <div style={{ flex: 1 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <strong style={{
-                        color: selectedTowerObj.type === 'chog' ? '#c084fc' : '#eab308',
-                        fontSize: '1.05rem'
-                      }}>
-                        {selectedTowerObj.type === 'chog' ? 'Chog Splash' : 'Molandak Sniper'}
-                      </strong>
-                      <span style={{
-                        background: 'var(--bg-panel-light)',
-                        border: '1px solid rgba(255,255,255,0.08)',
-                        padding: '2px 8px',
-                        borderRadius: '4px',
-                        fontSize: '0.85rem',
-                        fontWeight: 'bold'
-                      }}>
-                        Level {selectedTowerObj.level}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="stats-grid">
-                  <div className="stat-item">
-                    <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>DAMAGE</span>
-                    <div className="mono-font" style={{ fontSize: '1.1rem', fontWeight: 'bold' }}>
-                      {selectedTowerObj.damage}
-                      <span style={{ color: 'var(--neon-green)', fontSize: '0.75rem', marginLeft: '4px' }}>
-                        (+{selectedTowerObj.damage})
-                      </span>
-                    </div>
-                  </div>
-                  
-                  <div className="stat-item">
-                    <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>RANGE</span>
-                    <div className="mono-font" style={{ fontSize: '1.1rem', fontWeight: 'bold' }}>
-                      {selectedTowerObj.range} cells
-                    </div>
-                  </div>
-                </div>
-
-                {/* BOTTOM ACTION BUTTONS */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: 'auto' }}>
-                  <button 
-                    onClick={handleUpgradeSelectedTower}
-                    className="cyber-button cyber-button-yellow"
-                    disabled={stats.gold < (selectedTowerObj.cost * 2)}
-                    style={{ width: '100%', padding: '10px' }}
-                  >
-                    <Zap size={14} fill="#06040a" /> Upgrade: {selectedTowerObj.cost * 2} MON
-                  </button>
-
-                  <button 
-                    onClick={handleSellSelectedTower}
-                    className="cyber-button-outline"
-                    style={{ width: '100%', borderColor: 'rgba(239, 68, 68, 0.4)', color: 'var(--neon-red)' }}
-                  >
-                    Deconstruct (Refund: {Math.round(selectedTowerObj.cost / 2)} MON)
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div style={{
-                flex: 1,
-                display: 'flex',
-                flexDirection: 'column',
-                justifyContent: 'center',
-                alignItems: 'center',
-                color: 'var(--text-muted)',
-                textAlign: 'center',
-                fontSize: '0.85rem'
-              }}>
-                <Info size={24} style={{ marginBottom: '10px', color: 'var(--text-muted)' }} />
-                Select a placed tower on the grid to perform level upgrades or reclaim parts.
-              </div>
-            )}
+      {/* Footer Info */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px', fontSize: '0.9rem', color: 'var(--text-inactive)' }} className="pixel-font">
+        {walletConnected ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <div className="network-dot active" />
+            <span>{userAddress?.substring(0, 6)}...{userAddress?.substring(userAddress?.length - 4)}</span>
           </div>
+        ) : isDemoMode ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <div className="network-dot" style={{ backgroundColor: '#a855f7' }} />
+            <span>SIMULATION MODE (FREE)</span>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <div className="network-dot error" />
+            <span>WALLET DISCONNECTED</span>
+          </div>
+        )}
+
+        <div>
+          <span>v1.0.0</span>
         </div>
-      </main>
-
-      {/* FOOTER */}
-      <footer style={{
-        marginTop: 'auto',
-        background: 'var(--bg-darker)',
-        padding: '20px 24px',
-        textAlign: 'center',
-        borderTop: '1px solid rgba(131, 110, 253, 0.05)',
-        fontSize: '0.8rem',
-        color: 'var(--text-muted)'
-      }}>
-        Monad Defense — Built using Vibecoding on Monad Testnet. Starting a game requires spending $MON testnet.
-      </footer>
+      </div>
     </div>
   );
 }
